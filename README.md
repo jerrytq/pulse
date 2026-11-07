@@ -37,6 +37,8 @@ Local checks: `npm.cmd test`, `npm.cmd run typecheck`, and `npm.cmd run build`.
 
 ## Behavior
 
+- **Export backup** appears when signed in. It downloads the entire real mood collection as a dated JSON file, regardless of the graph range or demo mode. It requires an online server read and waits for pending writes to finish; offline or failed reads never fall back to cached or demo data. An empty account produces an explicit zero-document backup.
+
 - Graph ranges: seven, thirty, ninety days, or all time; the scale stays fixed at 1–5.
 - Missing days break the line rather than counting as zero or neutral.
 - Hover a point for its date and score, or open the recorded-scores table.
@@ -45,3 +47,13 @@ Local checks: `npm.cmd test`, `npm.cmd run typecheck`, and `npm.cmd run build`.
 - Sign-out clears mood data from the UI. Persistent Firestore disk caching is not enabled.
 
 Google sign-in and production database access require verification in a real user session after the domain and rules setup. A successful build does not verify them.
+
+## Backup format and future restoration
+
+Keep the JSON file as downloaded. This is the app’s portable data export, not a Firebase managed-export file. No import feature is included.
+
+`format: "pulse-mood-backup"` and `schemaVersion: 1` identify the format. Each export includes a UTC export timestamp, source Firebase project/database, account UID/email/display name, source collection path, the mood scale and descriptions, a document count, and every mood document’s exact ID, path, and fields. Records are read directly from the server without ordering/filtering by date, so even records the graph cannot display are included. No authentication tokens or API keys are exported. Firestore rules, Firebase configuration, and Firebase Authentication accounts are not part of this mood-data backup.
+
+Within `documents[].data`, JSON primitives are stored directly. Firestore timestamps are represented as `{ "type": "timestamp", "seconds": ..., "nanoseconds": ... }`, preserving original precision. Arrays use `{ "type": "array", "values": [...] }`; ordinary nested maps use `{ "type": "map", "fields": {...} }` to avoid ambiguity with typed objects. Geographic points, base64 bytes, document references (including project/database/path), and non-JSON numeric values have explicit type tags. Unsupported values stop the export instead of silently dropping data. See `lib/backup.ts` and `tests/backup.test.mjs` for the format and tested reconstruction examples.
+
+A future restoration tool can decode the fields and write each document using its saved ID (or map the source UID to a replacement account). Preserve local calendar date strings as-is. Entry timezones were never recorded and cannot be reconstructed from an export. Current client security rules require `updatedAt` to be the current server time when writing; restoring original update timestamps unchanged requires a trusted administrative restore or a deliberate rules change. This file preserves those original values for that purpose. Retain dated copies outside Firebase to keep multiple recovery points.

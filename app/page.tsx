@@ -2,9 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { onAuthStateChanged, signInWithPopup, signOut, type User } from "firebase/auth";
-import { collection, doc, onSnapshot, orderBy, query, serverTimestamp, setDoc } from "firebase/firestore";
-import { ArrowRight, Check, ChevronDown, Leaf, LogOut, ShieldCheck, TrendingUp } from "lucide-react";
+import { collection, doc, getDocsFromServer, onSnapshot, orderBy, query, serverTimestamp, setDoc, waitForPendingWrites } from "firebase/firestore";
+import { ArrowRight, Check, ChevronDown, Download, Leaf, LogOut, ShieldCheck, TrendingUp } from "lucide-react";
 import MoodChart from "./mood-chart";
+import backupStyles from "./backup.module.css";
+import { backupFilename, createMoodBackup } from "@/lib/backup";
 import { getFirebase } from "@/lib/firebase";
 import { dateLabel, localDate, moods, shiftDate, type Entry } from "@/lib/mood";
 
@@ -38,6 +40,8 @@ export default function Home() {
   const [isLocalhost, setIsLocalhost] = useState(false);
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [backupMessage, setBackupMessage] = useState("");
   const [online, setOnline] = useState(true);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -52,7 +56,7 @@ export default function Home() {
     window.addEventListener("online", update); window.addEventListener("offline", update);
     const unsubscribe = onAuthStateChanged(getFirebase().auth, next => {
       account.current = next?.uid ?? null;
-      setUser(next); setEntries([]); setSelected(null); setLoaded(false); setError(""); setMessage(""); setAuthReady(true);
+      setUser(next); setEntries([]); setSelected(null); setLoaded(false); setError(""); setMessage(""); setBackupMessage(""); setAuthReady(true);
     }, error => { setError(friendlyError(error)); setAuthReady(true); });
     return () => { clearInterval(timer); unsubscribe(); window.removeEventListener("online", update); window.removeEventListener("offline", update); };
   }, []);
@@ -81,7 +85,7 @@ export default function Home() {
     finally { setBusy(false); }
   }
   async function save() {
-    if (!user || selected === null || !online || !loaded || saving) return;
+    if (!user || selected === null || !online || !loaded || saving || exporting) return;
     const date = localDate();
     if (date !== today) { setToday(date); return; }
     const uid = user.uid;
@@ -92,7 +96,36 @@ export default function Home() {
     } catch (error) { if (account.current === uid) setError(friendlyError(error)); }
     finally { setSaving(false); }
   }
-  // Preview scores only feed the history view; the save handler uses real entries.
+  async function exportBackup() {
+    if (!user || !online || saving || exporting) return;
+    const owner = user;
+    setExporting(true); setBackupMessage(""); setError("");
+    try {
+      const { db, auth } = getFirebase();
+      await waitForPendingWrites(db);
+      // Fetch the complete collection from the server. The graph omits fields
+      // and may hide old or unusual records, so it must never be the backup source.
+      const snapshot = await getDocsFromServer(collection(db, "users", owner.uid, "moods"));
+      if (account.current !== owner.uid || auth.currentUser?.uid !== owner.uid) return;
+      if (snapshot.metadata.hasPendingWrites || snapshot.metadata.fromCache) throw new Error("Backup needs confirmed server data.");
+      const backup = createMoodBackup({
+        projectId: db.app.options.projectId!, userId: owner.uid,
+        email: owner.email, displayName: owner.displayName,
+      }, snapshot.docs.map(document => ({ id: document.id, path: document.ref.path, data: document.data() })), moods);
+      const file = new Blob([JSON.stringify(backup, null, 2) + "\n"], { type: "application/json;charset=utf-8" });
+      const url = URL.createObjectURL(file);
+      const link = document.createElement("a");
+      link.href = url; link.download = backupFilename(backup.exportedAt);
+      document.body.appendChild(link);
+      try { link.click(); } finally { link.remove(); setTimeout(() => URL.revokeObjectURL(url), 30_000); }
+      setBackupMessage(`Backup download started: ${backup.documentCount} saved ${backup.documentCount === 1 ? "entry" : "entries"}. Includes your full history${showDemo ? ", not demo scores" : ""}.`);
+    } catch (error) {
+      if (account.current === owner.uid) {
+        setError((error as { code?: string }).code ? friendlyError(error) : "Couldn’t create a complete backup. No backup was downloaded. Please try again.");
+      }
+    } finally { setExporting(false); }
+  }
+  // Preview scores only feed the history view; saving and backups use real entries.
   const demoEntries: Entry[] = today ? Array.from({ length: 90 }, (_, index) => ({
     date: shiftDate(today, index - 89),
     score: [3, 4, 3, 2, 1, 2, 3, 4, 5, 4, 3, 4, 5, 4][index % 14],
@@ -105,7 +138,7 @@ export default function Home() {
 
   return <div className="app-shell">
     <header className="site-header"><a className="wordmark" href="/" aria-label="Pulse home"><span className="brand-icon"><Leaf size={22} strokeWidth={1.6} /></span>pulse<span className="wordmark-dot">.</span></a>
-      <div className="account">{user ? <><span className="account-name">{user.displayName || user.email}</span><button className="icon-button" onClick={logout} disabled={busy || saving} aria-label="Sign out" title="Sign out"><LogOut size={18} /></button></> : <span className="header-caption">A little space to check in.</span>}</div>
+      <div className="account">{user ? <><span className="account-name">{user.displayName || user.email}</span><button className="icon-button" onClick={logout} disabled={busy || saving || exporting} aria-label="Sign out" title="Sign out"><LogOut size={18} /></button></> : <span className="header-caption">A little space to check in.</span>}</div>
     </header>
     <main>
       <section className="intro"><p className="eyebrow">YOUR DAILY PAUSE</p><h1>Make room for how you feel.</h1><p>One small check-in. A clearer picture of your days.</p></section>
@@ -115,14 +148,16 @@ export default function Home() {
         <h2 id="checkin-title">Overall, how did you feel today?</h2><p className="subtle">Take a breath. Pick what feels closest.</p>
         <div className="mood-options" role="group" aria-label="Choose your daily mood score">{moods.map(mood => <button key={mood.score} className={`mood-option ${selected === mood.score ? "selected" : ""}`} style={{ "--mood-color": mood.color } as React.CSSProperties} disabled={!user || !loaded || saving} aria-pressed={selected === mood.score} aria-label={`${mood.score} — ${mood.label}. ${mood.description}`} title={mood.description} onClick={() => { setSelected(mood.score); setMessage(""); }}><MoodFace score={mood.score} /><span className="mood-label">{mood.label}</span><span className="mood-number">{mood.score}</span>{selected === mood.score && <span className="selected-check"><Check size={12} /></span>}</button>)}</div>
         <div className="checkin-bottom"><p className="selection-hint">{!authReady ? "Getting things ready…" : !user ? "Your check-ins belong to you. Sign in to start." : !loaded ? "Waiting for your mood history…" : activeMood ? activeMood.description : "No right or wrong answers. Just you, today."}</p>
-          {!user ? <button className="primary-button" disabled={!authReady || busy} onClick={login}>{busy ? "Signing in…" : "Continue with Google"}<ArrowRight size={16} /></button> : <button className="primary-button" disabled={selected === null || saving || !online || !loaded || selected === savedToday} onClick={save}>{saving ? "Saving…" : selected !== null && selected === savedToday ? <><Check size={16} />Saved for today</> : <>{savedToday ? "Update check-in" : "Save check-in"}<ArrowRight size={16} /></>}</button>}
+          {!user ? <button className="primary-button" disabled={!authReady || busy} onClick={login}>{busy ? "Signing in…" : "Continue with Google"}<ArrowRight size={16} /></button> : <button className="primary-button" disabled={selected === null || saving || exporting || !online || !loaded || selected === savedToday} onClick={save}>{saving ? "Saving…" : selected !== null && selected === savedToday ? <><Check size={16} />Saved for today</> : <>{savedToday ? "Update check-in" : "Save check-in"}<ArrowRight size={16} /></>}</button>}
         </div><p className="save-message" role="status" aria-live="polite">{message || (user && savedToday ? "You can change today’s score whenever you need to." : "")}</p>
       </section>
       <section className="history card" aria-labelledby="history-title"><div className="history-heading"><div><div className="eyebrow">THE BIGGER PICTURE</div><h2 id="history-title">{showDemo ? "A look at sample days" : "Your days, over time"}</h2></div>
         <div className="history-controls">
+          {user && <button className={backupStyles.button} disabled={exporting || saving || !online} onClick={exportBackup}><Download size={13} aria-hidden="true" />{exporting ? "Exporting…" : "Export backup"}</button>}
           {isLocalhost && <button className="demo-button" aria-pressed={showDemo} disabled={!today} onClick={() => setShowDemo(current => !current)}>{showDemo ? "Show my data" : "Show demo data"}</button>}
           <div className="range-select"><select aria-label="Graph date range" value={range} onChange={event => setRange(event.target.value)}><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="all">All time</option></select><ChevronDown size={14} /></div>
         </div></div>
+        {(exporting || backupMessage) && <p className={backupStyles.status} role="status" aria-live="polite">{exporting ? "Preparing your complete backup…" : backupMessage}</p>}
         {showDemo && <p className="demo-notice" role="status">Demo preview · Fictional scores across 90 days, with a few missed days. Nothing is saved to your account.</p>}
         <div className="chart-wrap">{visible.length && graphReady ? <MoodChart key={`${range}-${showDemo}`} entries={graphEntries.filter(entry => entry.date <= today)} today={today} range={range} /> : <div className="empty-chart"><div className="empty-grid" aria-hidden="true"/><div className="empty-content"><span className="empty-icon"><TrendingUp size={25} strokeWidth={1.4} /></span><h3>A little perspective starts here.</h3><p>{!user ? "Sign in and save your first mood to begin your graph." : !loaded ? "Your history will appear once it’s connected." : "Your check-ins will appear here, one day at a time."}</p></div></div>}</div>
         <div className="chart-footer"><span><span className="legend-dot" />{showDemo ? "Sample mood" : "Daily mood"} <span className="legend-note">· Missing days stay blank</span></span><span><strong>{graphReady ? visible.length : "—"}</strong> {showDemo ? "sample entries" : "check-ins"} <span className="stat-separator">/</span> <strong>{graphReady ? average : "—"}</strong> average</span></div>
