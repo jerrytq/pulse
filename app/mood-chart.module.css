@@ -1,0 +1,42 @@
+.point { outline: none; }
+.point:focus-visible .halo { opacity: .35; }
+
+.tooltip {
+  box-sizing: border-box;
+  padding: 13px 16px;
+  border: 1px solid #dce5d6;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 8px 28px #243a2526, 0 2px 6px #243a250a;
+  font-family: 'DM Sans', sans-serif;
+  line-height: 1.5;
+}
+
+.date {
+  display: block;
+  margin-bottom: 6px;
+  color: #75826e;
+  font-size: 11px;
+}
+
+.score {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #35482e;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.swatch { width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; }
+.label { font-size: 12px; font-weight: 400; color: #65775a; }
+.arrow {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-right: 1px solid #dce5d6;
+  border-bottom: 1px solid #dce5d6;
+  background: #fff;
+  transform: translateX(-50%) rotate(45deg);
+}

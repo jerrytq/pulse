@@ -4,8 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import { onAuthStateChanged, signInWithPopup, signOut, type User } from "firebase/auth";
 import { collection, doc, onSnapshot, orderBy, query, serverTimestamp, setDoc } from "firebase/firestore";
 import { ArrowRight, Check, ChevronDown, Leaf, LogOut, ShieldCheck, TrendingUp } from "lucide-react";
+import MoodChart from "./mood-chart";
 import { getFirebase } from "@/lib/firebase";
-import { calendarSeries, dateLabel, localDate, moods, shiftDate, type Entry } from "@/lib/mood";
+import { dateLabel, localDate, moods, shiftDate, type Entry } from "@/lib/mood";
 
 function friendlyError(error: unknown) {
   const code = (error as { code?: string }).code;
@@ -22,28 +23,6 @@ function MoodFace({ score }: { score: number }) {
     <circle cx="24" cy="24" r="20" stroke="currentColor" strokeWidth="1.7" />
     <circle cx="17" cy="20" r="1.7" fill="currentColor" /><circle cx="31" cy="20" r="1.7" fill="currentColor" />
     <path d={score === 1 ? "M15 33 Q24 20 33 33" : score === 2 ? "M17 31 Q24 24 31 31" : score === 3 ? "M17 29 H31" : score === 4 ? "M17 27 Q24 35 31 27" : "M14 26 Q24 42 34 26 Z"} stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
-  </svg>;
-}
-
-function MoodChart({ entries, today, range }: { entries: Entry[]; today: string; range: string }) {
-  const start = range === "all" ? (entries[0]?.date ?? shiftDate(today, -29)) : shiftDate(today, -(Number(range) - 1));
-  const points = calendarSeries(entries, start, today);
-  const width = 900, height = 240, left = 36, right = 18, top = 18, bottom = 40;
-  const x = (index: number) => left + (points.length === 1 ? .5 : index / (points.length - 1)) * (width - left - right);
-  const y = (score: number) => top + (5 - score) / 4 * (height - top - bottom);
-  const lines: string[] = [];
-  let current = "";
-  points.forEach((point, index) => {
-    if (point.score === null) { if (current) lines.push(current); current = ""; }
-    else current += `${current ? " L" : "M"}${x(index)} ${y(point.score)}`;
-  });
-  if (current) lines.push(current);
-  const labels = [...new Set([0, Math.floor((points.length - 1) / 2), points.length - 1])];
-  return <svg className="mood-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`Mood scores from ${dateLabel(start)} to ${dateLabel(today)}. Missing days are gaps. Exact scores are in the table below.`}>
-    {[1, 2, 3, 4, 5].map(score => <g key={score}><line x1={left} x2={width - right} y1={y(score)} y2={y(score)} stroke="#e9ece6" strokeDasharray="3 5" /><text x="10" y={y(score) + 4} fill="#7a827b" fontSize="12">{score}</text></g>)}
-    {lines.map((line, index) => <path key={index} d={line} stroke="#527d65" strokeWidth="2.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />)}
-    {points.map((point, index) => point.score !== null && <circle key={point.date} cx={x(index)} cy={y(point.score)} r="4.5" fill={moods[point.score - 1].color} stroke="white" strokeWidth="2"><title>{dateLabel(point.date)}: {point.score} — {moods[point.score - 1].label}</title></circle>)}
-    {labels.map(index => <text key={index} x={x(index)} y={height - 9} textAnchor={index === 0 ? "start" : index === points.length - 1 ? "end" : "middle"} fill="#7a827b" fontSize="12">{dateLabel(points[index].date)}</text>)}
   </svg>;
 }
 
@@ -145,7 +124,7 @@ export default function Home() {
           <div className="range-select"><select aria-label="Graph date range" value={range} onChange={event => setRange(event.target.value)}><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="all">All time</option></select><ChevronDown size={14} /></div>
         </div></div>
         {showDemo && <p className="demo-notice" role="status">Demo preview · Fictional scores across 90 days, with a few missed days. Nothing is saved to your account.</p>}
-        <div className="chart-wrap">{visible.length && graphReady ? <MoodChart entries={graphEntries.filter(entry => entry.date <= today)} today={today} range={range} /> : <div className="empty-chart"><div className="empty-grid" aria-hidden="true"/><div className="empty-content"><span className="empty-icon"><TrendingUp size={25} strokeWidth={1.4} /></span><h3>A little perspective starts here.</h3><p>{!user ? "Sign in and save your first mood to begin your graph." : !loaded ? "Your history will appear once it’s connected." : "Your check-ins will appear here, one day at a time."}</p></div></div>}</div>
+        <div className="chart-wrap">{visible.length && graphReady ? <MoodChart key={`${range}-${showDemo}`} entries={graphEntries.filter(entry => entry.date <= today)} today={today} range={range} /> : <div className="empty-chart"><div className="empty-grid" aria-hidden="true"/><div className="empty-content"><span className="empty-icon"><TrendingUp size={25} strokeWidth={1.4} /></span><h3>A little perspective starts here.</h3><p>{!user ? "Sign in and save your first mood to begin your graph." : !loaded ? "Your history will appear once it’s connected." : "Your check-ins will appear here, one day at a time."}</p></div></div>}</div>
         <div className="chart-footer"><span><span className="legend-dot" />{showDemo ? "Sample mood" : "Daily mood"} <span className="legend-note">· Missing days stay blank</span></span><span><strong>{graphReady ? visible.length : "—"}</strong> {showDemo ? "sample entries" : "check-ins"} <span className="stat-separator">/</span> <strong>{graphReady ? average : "—"}</strong> average</span></div>
         {!!visible.length && graphReady && <details className="history-table"><summary>{showDemo ? "View sample scores" : "View recorded scores"}</summary><div className="table-scroll"><table><caption className="sr-only">{showDemo ? "Fictional sample scores" : "Recorded scores"} in the selected date range</caption><thead><tr><th>Date</th><th>Mood</th><th>Score</th></tr></thead><tbody>{[...visible].reverse().map(entry => <tr key={entry.date}><td>{dateLabel(entry.date, { year: "numeric", month: "short", day: "numeric" })}</td><td>{moods[entry.score - 1].label}</td><td>{entry.score} / 5</td></tr>)}</tbody></table></div></details>}
       </section>
