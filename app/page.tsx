@@ -55,6 +55,8 @@ export default function Home() {
   const [selected, setSelected] = useState<number | null>(null);
   const [today, setToday] = useState("");
   const [range, setRange] = useState("30");
+  const [showDemo, setShowDemo] = useState(false);
+  const [isLocalhost, setIsLocalhost] = useState(false);
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [online, setOnline] = useState(true);
@@ -64,6 +66,7 @@ export default function Home() {
   const savedToday = entries.find(entry => entry.date === today)?.score;
 
   useEffect(() => {
+    setIsLocalhost(["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname));
     const update = () => { setToday(localDate()); setOnline(navigator.onLine); };
     update();
     const timer = setInterval(update, 30_000);
@@ -110,7 +113,14 @@ export default function Home() {
     } catch (error) { if (account.current === uid) setError(friendlyError(error)); }
     finally { setSaving(false); }
   }
-  const visible = entries.filter(entry => entry.date <= today && (range === "all" || entry.date >= shiftDate(today || localDate(), -(Number(range) - 1))));
+  // Preview scores only feed the history view; the save handler uses real entries.
+  const demoEntries: Entry[] = today ? Array.from({ length: 90 }, (_, index) => ({
+    date: shiftDate(today, index - 89),
+    score: [3, 4, 3, 2, 1, 2, 3, 4, 5, 4, 3, 4, 5, 4][index % 14],
+  })).filter((_, index) => index % 17 !== 6) : [];
+  const graphEntries = showDemo ? demoEntries : entries;
+  const graphReady = showDemo || loaded;
+  const visible = graphEntries.filter(entry => entry.date <= today && (range === "all" || entry.date >= shiftDate(today || localDate(), -(Number(range) - 1))));
   const average = visible.length ? (visible.reduce((sum, entry) => sum + entry.score, 0) / visible.length).toFixed(1) : "—";
   const activeMood = moods.find(mood => mood.score === selected);
 
@@ -129,10 +139,15 @@ export default function Home() {
           {!user ? <button className="primary-button" disabled={!authReady || busy} onClick={login}>{busy ? "Signing in…" : "Continue with Google"}<ArrowRight size={16} /></button> : <button className="primary-button" disabled={selected === null || saving || !online || !loaded || selected === savedToday} onClick={save}>{saving ? "Saving…" : selected !== null && selected === savedToday ? <><Check size={16} />Saved for today</> : <>{savedToday ? "Update check-in" : "Save check-in"}<ArrowRight size={16} /></>}</button>}
         </div><p className="save-message" role="status" aria-live="polite">{message || (user && savedToday ? "You can change today’s score whenever you need to." : "")}</p>
       </section>
-      <section className="history card" aria-labelledby="history-title"><div className="history-heading"><div><div className="eyebrow">THE BIGGER PICTURE</div><h2 id="history-title">Your days, over time</h2></div><div className="range-select"><select aria-label="Graph date range" value={range} onChange={event => setRange(event.target.value)}><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="all">All time</option></select><ChevronDown size={14} /></div></div>
-        <div className="chart-wrap">{visible.length && loaded ? <MoodChart entries={entries.filter(entry => entry.date <= today)} today={today} range={range} /> : <div className="empty-chart"><div className="empty-grid" aria-hidden="true"/><div className="empty-content"><span className="empty-icon"><TrendingUp size={25} strokeWidth={1.4} /></span><h3>A little perspective starts here.</h3><p>{!user ? "Sign in and save your first mood to begin your graph." : !loaded ? "Your history will appear once it’s connected." : "Your check-ins will appear here, one day at a time."}</p></div></div>}</div>
-        <div className="chart-footer"><span><span className="legend-dot" />Daily mood <span className="legend-note">· Missing days stay blank</span></span><span><strong>{loaded ? visible.length : "—"}</strong> check-ins <span className="stat-separator">/</span> <strong>{loaded ? average : "—"}</strong> average</span></div>
-        {!!visible.length && loaded && <details className="history-table"><summary>View recorded scores</summary><div className="table-scroll"><table><caption className="sr-only">Scores in the selected date range</caption><thead><tr><th>Date</th><th>Mood</th><th>Score</th></tr></thead><tbody>{[...visible].reverse().map(entry => <tr key={entry.date}><td>{dateLabel(entry.date, { year: "numeric", month: "short", day: "numeric" })}</td><td>{moods[entry.score - 1].label}</td><td>{entry.score} / 5</td></tr>)}</tbody></table></div></details>}
+      <section className="history card" aria-labelledby="history-title"><div className="history-heading"><div><div className="eyebrow">THE BIGGER PICTURE</div><h2 id="history-title">{showDemo ? "A look at sample days" : "Your days, over time"}</h2></div>
+        <div className="history-controls">
+          {isLocalhost && <button className="demo-button" aria-pressed={showDemo} disabled={!today} onClick={() => setShowDemo(current => !current)}>{showDemo ? "Show my data" : "Show demo data"}</button>}
+          <div className="range-select"><select aria-label="Graph date range" value={range} onChange={event => setRange(event.target.value)}><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="all">All time</option></select><ChevronDown size={14} /></div>
+        </div></div>
+        {showDemo && <p className="demo-notice" role="status">Demo preview · Fictional scores across 90 days, with a few missed days. Nothing is saved to your account.</p>}
+        <div className="chart-wrap">{visible.length && graphReady ? <MoodChart entries={graphEntries.filter(entry => entry.date <= today)} today={today} range={range} /> : <div className="empty-chart"><div className="empty-grid" aria-hidden="true"/><div className="empty-content"><span className="empty-icon"><TrendingUp size={25} strokeWidth={1.4} /></span><h3>A little perspective starts here.</h3><p>{!user ? "Sign in and save your first mood to begin your graph." : !loaded ? "Your history will appear once it’s connected." : "Your check-ins will appear here, one day at a time."}</p></div></div>}</div>
+        <div className="chart-footer"><span><span className="legend-dot" />{showDemo ? "Sample mood" : "Daily mood"} <span className="legend-note">· Missing days stay blank</span></span><span><strong>{graphReady ? visible.length : "—"}</strong> {showDemo ? "sample entries" : "check-ins"} <span className="stat-separator">/</span> <strong>{graphReady ? average : "—"}</strong> average</span></div>
+        {!!visible.length && graphReady && <details className="history-table"><summary>{showDemo ? "View sample scores" : "View recorded scores"}</summary><div className="table-scroll"><table><caption className="sr-only">{showDemo ? "Fictional sample scores" : "Recorded scores"} in the selected date range</caption><thead><tr><th>Date</th><th>Mood</th><th>Score</th></tr></thead><tbody>{[...visible].reverse().map(entry => <tr key={entry.date}><td>{dateLabel(entry.date, { year: "numeric", month: "short", day: "numeric" })}</td><td>{moods[entry.score - 1].label}</td><td>{entry.score} / 5</td></tr>)}</tbody></table></div></details>}
       </section>
       <p className="gentle-note">Some days bloom. Some days just are. They all belong here.</p>
     </main><footer><span><ShieldCheck size={14} />Private to your account</span><span>A moment for you, every day.</span></footer>

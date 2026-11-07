@@ -1,6 +1,8 @@
 # Pulse
 
-Google sign-in, one editable 1–5 score per local calendar day, and a graph of your Firestore entries. No analytics or example mood data.
+Google sign-in, one editable 1–5 score per local calendar day, and a graph of your Firestore entries. No analytics.
+
+On localhost (including `127.0.0.1` and IPv6 loopback), click **Show demo data** beside the graph to preview fictional scores across 90 days, including gaps for missed days. The demo button is hidden on hosted domains. No sign-in is needed for the preview, and sample scores are never written to Firestore. Click **Show my data** to return to your real history.
 
 ## Firebase setup
 
