@@ -28,7 +28,7 @@ function decode(value) {
 test('JSON backup retains every supplied document, all fields, IDs, and exact timestamps', () => {
   const updatedAt = new Timestamp(1794080000, 123456789);
   const documents = [
-    { id: '2026-11-07', path: 'users/owner/moods/2026-11-07', data: { date: '2026-11-07', score: 5, updatedAt } },
+    { id: '2026-11-07', path: 'users/owner/moods/2026-11-07', data: { date: '2026-11-07', score: 5, updatedAt, note: 'Walked by the lake.\nA calmer day. 🌿' } },
     { id: '2020-01-01', path: 'users/owner/moods/2020-01-01', data: { date: '2020-01-01', score: 1, updatedAt, extra: { type: 'timestamp', note: 'keep this field' } } },
     { id: 'unusual-record', path: 'users/owner/moods/unusual-record', data: { note: 'not visible on the graph, but still backed up' } },
   ];

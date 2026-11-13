@@ -2,13 +2,15 @@
 
 import { useEffect, useRef, useState } from "react";
 import { onAuthStateChanged, signInWithPopup, signOut, type User } from "firebase/auth";
-import { collection, doc, getDocsFromServer, onSnapshot, orderBy, query, serverTimestamp, setDoc, waitForPendingWrites } from "firebase/firestore";
+import { collection, deleteField, doc, getDocsFromServer, onSnapshot, orderBy, query, serverTimestamp, setDoc, updateDoc, waitForPendingWrites } from "firebase/firestore";
 import { ArrowRight, Check, ChevronDown, Download, Leaf, LogOut, ShieldCheck, TrendingUp } from "lucide-react";
 import MoodChart from "./mood-chart";
+import NoteEditor from "./note-editor";
+import noteStyles from "./notes.module.css";
 import backupStyles from "./backup.module.css";
 import { backupFilename, createMoodBackup } from "@/lib/backup";
 import { getFirebase } from "@/lib/firebase";
-import { dateLabel, localDate, moods, shiftDate, type Entry } from "@/lib/mood";
+import { dateLabel, localDate, moods, normalizeNote, shiftDate, type Entry } from "@/lib/mood";
 
 function friendlyError(error: unknown) {
   const code = (error as { code?: string }).code;
@@ -42,6 +44,9 @@ export default function Home() {
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [backupMessage, setBackupMessage] = useState("");
+  const [noteTarget, setNoteTarget] = useState<{ entry: Entry; demo: boolean } | null>(null);
+  const [savingNote, setSavingNote] = useState(false);
+  const [demoNotes, setDemoNotes] = useState<Record<string, string>>({});
   const [online, setOnline] = useState(true);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -56,7 +61,7 @@ export default function Home() {
     window.addEventListener("online", update); window.addEventListener("offline", update);
     const unsubscribe = onAuthStateChanged(getFirebase().auth, next => {
       account.current = next?.uid ?? null;
-      setUser(next); setEntries([]); setSelected(null); setLoaded(false); setError(""); setMessage(""); setBackupMessage(""); setAuthReady(true);
+      setUser(next); setEntries([]); setSelected(null); setLoaded(false); setError(""); setMessage(""); setBackupMessage(""); setNoteTarget(null); setAuthReady(true);
     }, error => { setError(friendlyError(error)); setAuthReady(true); });
     return () => { clearInterval(timer); unsubscribe(); window.removeEventListener("online", update); window.removeEventListener("offline", update); };
   }, []);
@@ -65,7 +70,7 @@ export default function Home() {
     if (!user) return;
     return onSnapshot(query(collection(getFirebase().db, "users", user.uid, "moods"), orderBy("date", "asc")), { includeMetadataChanges: true }, snapshot => {
       if (snapshot.metadata.hasPendingWrites || account.current !== user.uid) return;
-      setEntries(snapshot.docs.map(item => item.data()).filter(item => /^\d{4}-\d{2}-\d{2}$/.test(item.date) && Number.isInteger(item.score) && item.score >= 1 && item.score <= 5).map(item => ({ date: item.date, score: item.score })));
+      setEntries(snapshot.docs.map(item => item.data()).filter(item => /^\d{4}-\d{2}-\d{2}$/.test(item.date) && Number.isInteger(item.score) && item.score >= 1 && item.score <= 5).map(item => ({ date: item.date, score: item.score, ...(typeof item.note === "string" ? { note: item.note } : {}) })));
       setLoaded(true);
     }, error => { setLoaded(false); setError(friendlyError(error)); });
   }, [user]);
@@ -85,19 +90,19 @@ export default function Home() {
     finally { setBusy(false); }
   }
   async function save() {
-    if (!user || selected === null || !online || !loaded || saving || exporting) return;
+    if (!user || selected === null || !online || !loaded || saving || exporting || savingNote) return;
     const date = localDate();
     if (date !== today) { setToday(date); return; }
     const uid = user.uid;
     setSaving(true); setError(""); setMessage("");
     try {
-      await setDoc(doc(getFirebase().db, "users", uid, "moods", date), { date, score: selected, updatedAt: serverTimestamp() });
+      await setDoc(doc(getFirebase().db, "users", uid, "moods", date), { date, score: selected, updatedAt: serverTimestamp() }, { merge: true });
       if (account.current === uid) setMessage("Saved. A little moment, just for you.");
     } catch (error) { if (account.current === uid) setError(friendlyError(error)); }
     finally { setSaving(false); }
   }
   async function exportBackup() {
-    if (!user || !online || saving || exporting) return;
+    if (!user || !online || saving || exporting || savingNote) return;
     const owner = user;
     setExporting(true); setBackupMessage(""); setError("");
     try {
@@ -125,10 +130,30 @@ export default function Home() {
       }
     } finally { setExporting(false); }
   }
-  // Preview scores only feed the history view; saving and backups use real entries.
+  async function saveNote(draft: string) {
+    if (!noteTarget) return;
+    const note = normalizeNote(draft);
+    if (noteTarget.demo) { setDemoNotes(current => ({ ...current, [noteTarget.entry.date]: note })); return; }
+    if (!user || account.current !== user.uid) throw new Error("Please sign in again to save this note.");
+    if (!navigator.onLine) throw new Error("You’re offline. Reconnect to save your note.");
+    if (saving || exporting || savingNote) throw new Error("Please wait for your current save or export to finish.");
+    const uid = user.uid;
+    setSavingNote(true);
+    try {
+      // updateDoc never recreates a deleted day and leaves the mood score intact.
+      await updateDoc(doc(getFirebase().db, "users", uid, "moods", noteTarget.entry.date), { note: note || deleteField(), updatedAt: serverTimestamp() });
+      if (account.current !== uid) throw new Error("Your account changed before the note finished saving.");
+    } catch (error) {
+      if ((error as { code?: string }).code === "permission-denied") throw new Error("Couldn’t save the note. Publish the updated firestore.rules in Firebase Console, then try again.");
+      if ((error as { code?: string }).code === "not-found") throw new Error("This day was deleted. Close this editor and refresh your history.");
+      throw new Error((error as { code?: string }).code ? friendlyError(error) : error instanceof Error ? error.message : "Couldn’t save your note. Please try again.");
+    } finally { setSavingNote(false); }
+  }
+  // Preview scores and notes stay in memory; saving and backups use real entries.
   const demoEntries: Entry[] = today ? Array.from({ length: 90 }, (_, index) => ({
     date: shiftDate(today, index - 89),
     score: [3, 4, 3, 2, 1, 2, 3, 4, 5, 4, 3, 4, 5, 4][index % 14],
+    note: demoNotes[shiftDate(today, index - 89)] ?? "",
   })).filter((_, index) => index % 17 !== 6) : [];
   const graphEntries = showDemo ? demoEntries : entries;
   const graphReady = showDemo || loaded;
@@ -138,7 +163,7 @@ export default function Home() {
 
   return <div className="app-shell">
     <header className="site-header"><a className="wordmark" href="/" aria-label="Pulse home"><span className="brand-icon"><Leaf size={22} strokeWidth={1.6} /></span>pulse<span className="wordmark-dot">.</span></a>
-      <div className="account">{user ? <><span className="account-name">{user.displayName || user.email}</span><button className="icon-button" onClick={logout} disabled={busy || saving || exporting} aria-label="Sign out" title="Sign out"><LogOut size={18} /></button></> : <span className="header-caption">A little space to check in.</span>}</div>
+      <div className="account">{user ? <><span className="account-name">{user.displayName || user.email}</span><button className="icon-button" onClick={logout} disabled={busy || saving || exporting || savingNote} aria-label="Sign out" title="Sign out"><LogOut size={18} /></button></> : <span className="header-caption">A little space to check in.</span>}</div>
     </header>
     <main>
       <section className="intro"><p className="eyebrow">YOUR DAILY PAUSE</p><h1>Make room for how you feel.</h1><p>One small check-in. A clearer picture of your days.</p></section>
@@ -153,17 +178,19 @@ export default function Home() {
       </section>
       <section className="history card" aria-labelledby="history-title"><div className="history-heading"><div><div className="eyebrow">THE BIGGER PICTURE</div><h2 id="history-title">{showDemo ? "A look at sample days" : "Your days, over time"}</h2></div>
         <div className="history-controls">
-          {user && <button className={backupStyles.button} disabled={exporting || saving || !online} onClick={exportBackup}><Download size={13} aria-hidden="true" />{exporting ? "Exporting…" : "Export backup"}</button>}
+          {user && <button className={backupStyles.button} disabled={exporting || saving || savingNote || !online} onClick={exportBackup}><Download size={13} aria-hidden="true" />{exporting ? "Exporting…" : "Export backup"}</button>}
           {isLocalhost && <button className="demo-button" aria-pressed={showDemo} disabled={!today} onClick={() => setShowDemo(current => !current)}>{showDemo ? "Show my data" : "Show demo data"}</button>}
           <div className="range-select"><select aria-label="Graph date range" value={range} onChange={event => setRange(event.target.value)}><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="all">All time</option></select><ChevronDown size={14} /></div>
         </div></div>
         {(exporting || backupMessage) && <p className={backupStyles.status} role="status" aria-live="polite">{exporting ? "Preparing your complete backup…" : backupMessage}</p>}
         {showDemo && <p className="demo-notice" role="status">Demo preview · Fictional scores across 90 days, with a few missed days. Nothing is saved to your account.</p>}
-        <div className="chart-wrap">{visible.length && graphReady ? <MoodChart key={`${range}-${showDemo}`} entries={graphEntries.filter(entry => entry.date <= today)} today={today} range={range} /> : <div className="empty-chart"><div className="empty-grid" aria-hidden="true"/><div className="empty-content"><span className="empty-icon"><TrendingUp size={25} strokeWidth={1.4} /></span><h3>A little perspective starts here.</h3><p>{!user ? "Sign in and save your first mood to begin your graph." : !loaded ? "Your history will appear once it’s connected." : "Your check-ins will appear here, one day at a time."}</p></div></div>}</div>
+        <div className="chart-wrap">{visible.length && graphReady ? <MoodChart key={`${range}-${showDemo}`} entries={graphEntries.filter(entry => entry.date <= today)} today={today} range={range} onAnnotate={entry => setNoteTarget({ entry, demo: showDemo })} /> : <div className="empty-chart"><div className="empty-grid" aria-hidden="true"/><div className="empty-content"><span className="empty-icon"><TrendingUp size={25} strokeWidth={1.4} /></span><h3>A little perspective starts here.</h3><p>{!user ? "Sign in and save your first mood to begin your graph." : !loaded ? "Your history will appear once it’s connected." : "Your check-ins will appear here, one day at a time."}</p></div></div>}</div>
+        {!!visible.length && graphReady && <p className={noteStyles.instruction}>Click any dot to add or edit a note for that day.</p>}
         <div className="chart-footer"><span><span className="legend-dot" />{showDemo ? "Sample mood" : "Daily mood"} <span className="legend-note">· Missing days stay blank</span></span><span><strong>{graphReady ? visible.length : "—"}</strong> {showDemo ? "sample entries" : "check-ins"} <span className="stat-separator">/</span> <strong>{graphReady ? average : "—"}</strong> average</span></div>
-        {!!visible.length && graphReady && <details className="history-table"><summary>{showDemo ? "View sample scores" : "View recorded scores"}</summary><div className="table-scroll"><table><caption className="sr-only">{showDemo ? "Fictional sample scores" : "Recorded scores"} in the selected date range</caption><thead><tr><th>Date</th><th>Mood</th><th>Score</th></tr></thead><tbody>{[...visible].reverse().map(entry => <tr key={entry.date}><td>{dateLabel(entry.date, { year: "numeric", month: "short", day: "numeric" })}</td><td>{moods[entry.score - 1].label}</td><td>{entry.score} / 5</td></tr>)}</tbody></table></div></details>}
+        {!!visible.length && graphReady && <details className="history-table"><summary>{showDemo ? "View sample scores" : "View recorded scores"}</summary><div className="table-scroll"><table><caption className="sr-only">{showDemo ? "Fictional sample scores" : "Recorded scores"} in the selected date range</caption><thead><tr><th>Date</th><th>Mood</th><th>Score</th><th>Note</th></tr></thead><tbody>{[...visible].reverse().map(entry => <tr key={entry.date}><td>{dateLabel(entry.date, { year: "numeric", month: "short", day: "numeric" })}</td><td>{moods[entry.score - 1].label}</td><td>{entry.score} / 5</td><td className={noteStyles.cell}>{entry.note && <span className={noteStyles.note}>{entry.note}</span>}<button className={noteStyles.edit} aria-label={`${entry.note ? "Edit" : "Add"} note for ${dateLabel(entry.date)}`} onClick={() => setNoteTarget({ entry, demo: showDemo })}>{entry.note ? "Edit note" : "Add note"}</button></td></tr>)}</tbody></table></div></details>}
       </section>
       <p className="gentle-note">Some days bloom. Some days just are. They all belong here.</p>
     </main><footer><span><ShieldCheck size={14} />Private to your account</span><span>A moment for you, every day.</span></footer>
+    {noteTarget && <NoteEditor key={`${noteTarget.demo}-${noteTarget.entry.date}`} entry={noteTarget.entry} demo={noteTarget.demo} onSave={saveNote} onClose={() => setNoteTarget(null)} />}
   </div>;
 }

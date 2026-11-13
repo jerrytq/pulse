@@ -6,7 +6,15 @@ export const moods = [
   { score: 5, label: "Very good", description: "Felt good for most of the day", color: "#477c69" },
 ] as const;
 
-export type Entry = { date: string; score: number };
+export type Entry = { date: string; score: number; note?: string };
+
+export const MAX_NOTE_LENGTH = 500;
+
+export function normalizeNote(note: string) {
+  const value = note.trim();
+  if (value.length > MAX_NOTE_LENGTH) throw new Error(`Notes must be ${MAX_NOTE_LENGTH} characters or fewer.`);
+  return value;
+}
 
 export function localDate(date = new Date()) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;

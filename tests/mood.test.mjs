@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { calendarSeries, localDate, shiftDate } from '../lib/mood.ts';
+import { calendarSeries, localDate, normalizeNote, shiftDate } from '../lib/mood.ts';
 
 test('missing days stay null and recorded low scores remain one', () => {
   assert.deepEqual(calendarSeries([
@@ -32,4 +32,11 @@ test('today follows the local calendar rather than the UTC date', () => {
 test('a first entry produces a single point and an empty history stays empty', () => {
   assert.deepEqual(calendarSeries([{ date: '2026-11-07', score: 3 }], '2026-11-07', '2026-11-07'), [{ date: '2026-11-07', score: 3 }]);
   assert.deepEqual(calendarSeries([], '2026-11-07', '2026-11-07'), [{ date: '2026-11-07', score: null }]);
+});
+
+test('day notes preserve multiline text, trim edges, allow removal, and reject overflow', () => {
+  assert.equal(normalizeNote('  A good walk.\nSaw a friend. 🌿  '), 'A good walk.\nSaw a friend. 🌿');
+  assert.equal(normalizeNote('   \n '), '');
+  assert.equal(normalizeNote('a'.repeat(500)).length, 500);
+  assert.throws(() => normalizeNote('a'.repeat(501)), /500 characters/);
 });

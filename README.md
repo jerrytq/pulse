@@ -37,6 +37,9 @@ Local checks: `npm.cmd test`, `npm.cmd run typecheck`, and `npm.cmd run build`.
 
 ## Behavior
 
+- Click any recorded graph point (or its **Add note / Edit note** button in the score table) to add, edit, or remove a note of up to 500 characters. Notes are shown on hover, marked on the graph, and included in full in backups. Saving a note only updates that existing day’s note and update timestamp; changing today’s mood score preserves its note. Clear the note and save to remove it. Demo notes stay in memory and are never exported or written to Firestore.
+- After updating to the notes feature, publish the updated `firestore.rules` in Firebase Console → Firestore Database → Rules. Existing records remain valid without a `note` field; an optional `note` must be a string no longer than 500 characters. The account ownership rules are unchanged.
+
 - **Export backup** appears when signed in. It downloads the entire real mood collection as a dated JSON file, regardless of the graph range or demo mode. It requires an online server read and waits for pending writes to finish; offline or failed reads never fall back to cached or demo data. An empty account produces an explicit zero-document backup.
 
 - Graph ranges: seven, thirty, ninety days, or all time; the scale stays fixed at 1–5.

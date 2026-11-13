@@ -8,7 +8,8 @@ service cloud.firestore {
       function validEntry() {
         let data = request.resource.data;
         return data.keys().hasAll(['date', 'score', 'updatedAt'])
-          && data.keys().hasOnly(['date', 'score', 'updatedAt'])
+          && data.keys().hasOnly(['date', 'score', 'updatedAt', 'note'])
+          && (!('note' in data) || (data.note is string && data.note.size() <= 500))
           && data.date is string
           && dateId.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
           && data.date == dateId
